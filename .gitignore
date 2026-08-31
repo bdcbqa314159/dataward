@@ -1,0 +1,57 @@
+# --- build output -----------------------------------------------------------
+build/
+cmake-build-*/
+out/
+_deps/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.dSYM/
+*.profraw
+*.profdata
+
+# --- CMake ------------------------------------------------------------------
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+compile_commands.json
+# clangd background-index cache
+.cache/
+# local dev virtualenv (pinned tools via requirements-dev.txt)
+.venv/
+venv/
+
+# --- local databases (tests create throwaway SQLite files) ------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# --- secrets ----------------------------------------------------------------
+*.key
+*.pem
+*.p12
+.env
+.env.*
+credentials
+*.secret
+# keyward encrypted vaults / agent sockets (dataward talks to keyward for creds)
+*.kwd
+*.sock
+
+# --- editor / OS ------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.vs/
+.idea/
+*.swp
+*~
+
+# Personal, per-project Claude Code context — never published
+.claude/
+CLAUDE.local.md
+CLAUDE.md
