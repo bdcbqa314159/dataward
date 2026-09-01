@@ -23,7 +23,16 @@ endforeach()
 FetchContent_Declare(soci
   GIT_REPOSITORY https://github.com/SOCI/soci.git
   GIT_TAG v4.1.4 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(soci)
+
+# --- Boost.Describe + Mp11 (the public reflection contract) -----------------
+# Header-only, PUBLIC: BOOST_DESCRIBE_STRUCT is the one line an app writes.
+FetchContent_Declare(boost_mp11
+  GIT_REPOSITORY https://github.com/boostorg/mp11.git
+  GIT_TAG boost-1.91.0 GIT_SHALLOW TRUE)
+FetchContent_Declare(boost_describe
+  GIT_REPOSITORY https://github.com/boostorg/describe.git
+  GIT_TAG boost-1.91.0 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(soci boost_mp11 boost_describe)
 
 add_library(dataward
   src/store.cpp
@@ -34,7 +43,9 @@ target_include_directories(dataward PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_compile_definitions(dataward PRIVATE DATAWARD_VERSION="${PROJECT_VERSION}")
-target_link_libraries(dataward PRIVATE soci_sqlite3)
+target_link_libraries(dataward
+  PUBLIC Boost::describe Boost::mp11
+  PRIVATE soci_sqlite3)
 
 if(MSVC)
   target_compile_options(dataward PRIVATE /W4)
@@ -56,6 +67,7 @@ if(DATAWARD_BUILD_TESTS)
 
   add_executable(dataward_tests
     tests/store_roundtrip_test.cpp
+    tests/typed_api_test.cpp
     tests/version_test.cpp)
   target_link_libraries(dataward_tests PRIVATE dataward::dataward GTest::gtest_main)
   include(GoogleTest)
