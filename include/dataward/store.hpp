@@ -3,10 +3,13 @@
 #include <boost/describe/class.hpp>
 #include <boost/describe/members.hpp>
 #include <boost/mp11/algorithm.hpp>
+#include <chrono>
 #include <concepts>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -90,6 +93,44 @@ struct column_traits<std::string> {
   static std::string from_value(const Value& v) { return std::get<std::string>(v); }
 };
 
+// Dates as ISO "YYYY-MM-DD" TEXT — sorts correctly, readable in any DB shell.
+template <>
+struct column_traits<std::chrono::year_month_day> {
+  static constexpr const char* sql_type = "TEXT";
+  static Value to_value(std::chrono::year_month_day v) {
+    char buf[16];
+    std::snprintf(buf, sizeof buf, "%04d-%02u-%02u", static_cast<int>(v.year()),
+                  static_cast<unsigned>(v.month()), static_cast<unsigned>(v.day()));
+    return std::string(buf);
+  }
+  static std::chrono::year_month_day from_value(const Value& v) {
+    const auto& s = std::get<std::string>(v);
+    if (s.size() != 10 || s[4] != '-' || s[7] != '-')
+      throw std::runtime_error("dataward: bad date '" + s + "', want YYYY-MM-DD");
+    return std::chrono::year_month_day{std::chrono::year(std::stoi(s.substr(0, 4))),
+                                       std::chrono::month(std::stoul(s.substr(5, 2))),
+                                       std::chrono::day(std::stoul(s.substr(8, 2)))};
+  }
+};
+
+template <class M>
+struct is_optional : std::false_type {};
+template <class U>
+struct is_optional<std::optional<U>> : std::true_type {};
+
+// optional<U> = U's column, nullable. NULL round-trips as nullopt.
+template <class U>
+struct column_traits<std::optional<U>> {
+  static constexpr const char* sql_type = column_traits<U>::sql_type;
+  static Value to_value(const std::optional<U>& v) {
+    return v ? column_traits<U>::to_value(*v) : Value{std::monostate{}};
+  }
+  static std::optional<U> from_value(const Value& v) {
+    if (std::holds_alternative<std::monostate>(v)) return std::nullopt;
+    return column_traits<U>::from_value(v);
+  }
+};
+
 }  // namespace detail
 
 // Handle to one open database. Move-only. The backend behind it (SOCI) is an
@@ -109,6 +150,9 @@ class Store {
   // described members in declaration order; first member is the PRIMARY KEY.
   template <class T>
   void ensure() {
+    using First = boost::mp11::mp_first<detail::members<T>>;
+    static_assert(!detail::is_optional<detail::member_type<T, First>>::value,
+                  "dataward: the first member is the primary key and cannot be optional");
     std::string sql = "CREATE TABLE IF NOT EXISTS \"";
     sql += detail::type_name<T>();
     sql += "\" (";
@@ -120,7 +164,10 @@ class Store {
       sql += d.name;
       sql += "\" ";
       sql += detail::column_traits<M>::sql_type;
-      sql += first ? " PRIMARY KEY" : " NOT NULL";
+      if (first)
+        sql += " PRIMARY KEY";
+      else if (!detail::is_optional<M>::value)
+        sql += " NOT NULL";
       first = false;
     });
     sql += ")";
