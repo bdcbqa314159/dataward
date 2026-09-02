@@ -55,6 +55,18 @@ if(DATAWARD_WITH_MYSQL)
   target_compile_definitions(dataward PRIVATE DATAWARD_HAS_MYSQL)
 endif()
 
+# keyward:// secret resolution is opt-in — keyward pulls libsodium and the OS
+# vault backends, which SQLite-only consumers should not pay for.
+option(DATAWARD_WITH_KEYWARD "Resolve keyward:// secrets (fetches keyward)" OFF)
+if(DATAWARD_WITH_KEYWARD)
+  FetchContent_Declare(keyward
+    GIT_REPOSITORY https://github.com/bdcbqa314159/keyward.git
+    GIT_TAG 8e40d4d42c99c7103d42425b65a35bd022e45f11)
+  FetchContent_MakeAvailable(keyward)
+  target_link_libraries(dataward PRIVATE keyward::keyward)
+  target_compile_definitions(dataward PRIVATE DATAWARD_HAS_KEYWARD)
+endif()
+
 if(MSVC)
   target_compile_options(dataward PRIVATE /W4)
 else()
@@ -73,15 +85,25 @@ if(DATAWARD_BUILD_TESTS)
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)  # MSVC
   FetchContent_MakeAvailable(googletest)
 
+  if(DATAWARD_WITH_KEYWARD)
+    # Lets the live keyward test seed a secret through keyward itself.
+    set(DATAWARD_TEST_KEYWARD_LIBS keyward::keyward)
+  endif()
+
   add_executable(dataward_tests
     tests/error_test.cpp
     tests/mysql_test.cpp
     tests/optional_date_test.cpp
+    tests/profile_test.cpp
     tests/query_api_test.cpp
     tests/store_roundtrip_test.cpp
     tests/typed_api_test.cpp
     tests/version_test.cpp)
-  target_link_libraries(dataward_tests PRIVATE dataward::dataward GTest::gtest_main)
+  target_link_libraries(dataward_tests
+    PRIVATE dataward::dataward GTest::gtest_main ${DATAWARD_TEST_KEYWARD_LIBS})
+  if(DATAWARD_WITH_KEYWARD)
+    target_compile_definitions(dataward_tests PRIVATE DATAWARD_TESTS_HAVE_KEYWARD)
+  endif()
   include(GoogleTest)
   gtest_discover_tests(dataward_tests)
 endif()

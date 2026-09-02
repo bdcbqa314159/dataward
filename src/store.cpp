@@ -5,7 +5,11 @@
 #ifdef DATAWARD_HAS_MYSQL
 #include <soci/mysql/soci-mysql.h>
 #endif
+#ifdef DATAWARD_HAS_KEYWARD
+#include <keyward/default_store.hpp>
+#endif
 
+#include <cstdlib>
 #include <deque>
 #include <utility>
 
@@ -114,6 +118,60 @@ Store Store::mysql([[maybe_unused]] const std::string& connect) {
 }
 
 Dialect Store::dialect() const { return impl_->dialect; }
+
+namespace {
+
+// keyward://app/name -> defaultSecretStore(app)->get(name)
+std::optional<std::string> resolve_keyward([[maybe_unused]] const std::string& app,
+                                           [[maybe_unused]] const std::string& name) {
+#ifdef DATAWARD_HAS_KEYWARD
+  return keyward::defaultSecretStore(app)->get(name);
+#else
+  throw OpenError("dataward: keyward:// secrets need DATAWARD_WITH_KEYWARD=ON");
+#endif
+}
+
+// The fail-loudly chain: a configured source that yields nothing throws.
+std::string resolve_password(const Profile& p) {
+  if (!p.password_env.empty()) {
+    if (const char* v = std::getenv(p.password_env.c_str()); v != nullptr && *v != '\0') return v;
+    if (p.password_secret.empty())
+      throw OpenError("dataward: password env var '" + p.password_env + "' is unset or empty");
+  }
+  if (!p.password_secret.empty()) {
+    constexpr std::string_view scheme = "keyward://";
+    if (p.password_secret.rfind(scheme, 0) != 0)
+      throw OpenError("dataward: unsupported secret scheme in '" + p.password_secret +
+                      "' (only keyward://app/name)");
+    const std::string rest = p.password_secret.substr(scheme.size());
+    const auto slash = rest.find('/');
+    if (slash == std::string::npos || slash == 0 || slash + 1 == rest.size())
+      throw OpenError("dataward: malformed secret uri '" + p.password_secret +
+                      "', want keyward://app/name");
+    auto secret = resolve_keyward(rest.substr(0, slash), rest.substr(slash + 1));
+    if (secret.has_value() && !secret->empty()) return *secret;
+    throw OpenError("dataward: secret '" + p.password_secret + "' not found or empty");
+  }
+  return "";
+}
+
+}  // namespace
+
+Store open(const Profile& p) {
+  if (p.backend == Dialect::sqlite) {
+    if (p.path.empty()) throw OpenError("dataward: sqlite profile needs a path");
+    return Store::sqlite(p.path);
+  }
+  std::string connect =
+      "db=" + p.db + " user=" + p.user + " host=" + p.host + " port=" + std::to_string(p.port);
+  const std::string password = resolve_password(p);
+  if (!password.empty()) {
+    if (password.find('\'') != std::string::npos)
+      throw OpenError("dataward: passwords containing ' are not supported in connect strings");
+    connect += " password='" + password + "'";
+  }
+  return Store::mysql(connect);
+}
 
 void Store::exec(const std::string& sql) {
   rethrow_as<QueryError>([&] { impl_->sql << sql; });

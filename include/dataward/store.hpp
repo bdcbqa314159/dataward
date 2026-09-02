@@ -168,6 +168,26 @@ Value to_bind(A&& a) {
 
 }  // namespace detail
 
+// Connection profile — programmatic, one per environment. SQLite needs only
+// `path` (no credentials). MySQL resolves its password through, in order:
+//   1. password_env    — NAME of an environment variable
+//   2. password_secret — "keyward://app/name" (needs DATAWARD_WITH_KEYWARD)
+// A configured source that yields nothing is an OpenError (fail loudly);
+// configuring neither connects without a password.
+struct Profile {
+  Dialect backend = Dialect::sqlite;
+  std::string path;  // sqlite: database file
+  std::string db;    // mysql ↓
+  std::string user;
+  std::string host = "127.0.0.1";
+  int port = 3306;
+  std::string password_env;
+  std::string password_secret;
+};
+
+class Store;
+Store open(const Profile& profile);
+
 // Handle to one open database. Move-only. The backend behind it (SOCI) is an
 // implementation detail and must never leak into this header.
 class Store {
