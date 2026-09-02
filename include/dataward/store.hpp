@@ -9,12 +9,12 @@
 #include <cstdio>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
 
+#include "dataward/error.hpp"
 #include "dataward/value.hpp"
 
 namespace dataward {
@@ -55,8 +55,15 @@ using members = boost::describe::describe_members<T, boost::describe::mod_public
 template <class T, class D>
 using member_type = std::remove_cvref_t<decltype(std::declval<T&>().*(D::pointer))>;
 
+// Pulls one alternative out of a Value or throws DecodeError.
+template <class A>
+const A& value_as(const Value& v, const char* want) {
+  if (const A* p = std::get_if<A>(&v)) return *p;
+  throw DecodeError(std::string("dataward: stored value is not ") + want);
+}
+
 // Type map: C++ member type -> SQL column type + Value conversions. Unmapped
-// types fail to compile here. optional<T> and year_month_day land in session 3.
+// types fail to compile here.
 template <class M>
 struct column_traits;
 
@@ -65,14 +72,16 @@ template <std::integral M>
 struct column_traits<M> {
   static constexpr const char* sql_type = "INTEGER";
   static Value to_value(M v) { return static_cast<std::int64_t>(v); }
-  static M from_value(const Value& v) { return static_cast<M>(std::get<std::int64_t>(v)); }
+  static M from_value(const Value& v) {
+    return static_cast<M>(value_as<std::int64_t>(v, "an integer"));
+  }
 };
 
 template <>
 struct column_traits<bool> {
   static constexpr const char* sql_type = "INTEGER";
   static Value to_value(bool v) { return static_cast<std::int64_t>(v); }
-  static bool from_value(const Value& v) { return std::get<std::int64_t>(v) != 0; }
+  static bool from_value(const Value& v) { return value_as<std::int64_t>(v, "an integer") != 0; }
 };
 
 template <std::floating_point M>
@@ -82,7 +91,7 @@ struct column_traits<M> {
   static M from_value(const Value& v) {
     // SQLite may hand a whole REAL back with integer affinity.
     if (std::holds_alternative<std::int64_t>(v)) return static_cast<M>(std::get<std::int64_t>(v));
-    return static_cast<M>(std::get<double>(v));
+    return static_cast<M>(value_as<double>(v, "a number"));
   }
 };
 
@@ -90,7 +99,7 @@ template <>
 struct column_traits<std::string> {
   static constexpr const char* sql_type = "TEXT";
   static Value to_value(std::string v) { return v; }
-  static std::string from_value(const Value& v) { return std::get<std::string>(v); }
+  static std::string from_value(const Value& v) { return value_as<std::string>(v, "text"); }
 };
 
 // Dates as ISO "YYYY-MM-DD" TEXT — sorts correctly, readable in any DB shell.
@@ -104,9 +113,9 @@ struct column_traits<std::chrono::year_month_day> {
     return std::string(buf);
   }
   static std::chrono::year_month_day from_value(const Value& v) {
-    const auto& s = std::get<std::string>(v);
+    const auto& s = value_as<std::string>(v, "a date");
     if (s.size() != 10 || s[4] != '-' || s[7] != '-')
-      throw std::runtime_error("dataward: bad date '" + s + "', want YYYY-MM-DD");
+      throw DecodeError("dataward: bad date '" + s + "', want YYYY-MM-DD");
     return std::chrono::year_month_day{std::chrono::year(std::stoi(s.substr(0, 4))),
                                        std::chrono::month(std::stoul(s.substr(5, 2))),
                                        std::chrono::day(std::stoul(s.substr(8, 2)))};
@@ -267,7 +276,12 @@ class Store {
   class Transaction {
    public:
     ~Transaction() {
-      if (store_ != nullptr) store_->exec("ROLLBACK");
+      // Swallow rollback failures: this dtor runs during exception unwinding,
+      // and a second throw would terminate().
+      if (store_ != nullptr) try {
+          store_->exec("ROLLBACK");
+        } catch (...) {  // NOLINT(bugprone-empty-catch)
+        }
     }
     Transaction(Transaction&& o) noexcept : store_(o.store_) { o.store_ = nullptr; }
     Transaction& operator=(Transaction&&) = delete;
@@ -287,8 +301,8 @@ class Store {
 
   Transaction begin() { return Transaction(*this); }
 
-  // ponytail: raw-SQL escape hatches prove the round-trip until the typed
-  // Describe-driven API lands (sessions 2-4); they become private seam helpers then.
+  // Deliberate low-level layer (kept public): raw SQL for what the typed API
+  // stays out of by design — PRAGMAs, indexes, migrations, ad-hoc aggregates.
   void exec(const std::string& sql);
   std::optional<std::int64_t> query_int64(const std::string& sql);
   std::optional<std::string> query_string(const std::string& sql);
