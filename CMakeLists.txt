@@ -66,6 +66,7 @@ if(DATAWARD_BUILD_TESTS)
   FetchContent_MakeAvailable(googletest)
 
   add_executable(dataward_tests
+    tests/error_test.cpp
     tests/optional_date_test.cpp
     tests/query_api_test.cpp
     tests/store_roundtrip_test.cpp
