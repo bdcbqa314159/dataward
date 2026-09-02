@@ -2,6 +2,9 @@
 
 #include <soci/soci.h>
 #include <soci/sqlite3/soci-sqlite3.h>
+#ifdef DATAWARD_HAS_MYSQL
+#include <soci/mysql/soci-mysql.h>
+#endif
 
 #include <deque>
 #include <utility>
@@ -78,6 +81,7 @@ Value cell_to_value(const soci::row& r, std::size_t i) {
 
 struct Store::Impl {
   soci::session sql;
+  Dialect dialect = Dialect::sqlite;
 };
 
 Store::Store(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -92,6 +96,24 @@ Store Store::sqlite(const std::string& path) {
     return Store(std::move(impl));
   });
 }
+
+Store Store::mysql([[maybe_unused]] const std::string& connect) {
+#ifdef DATAWARD_HAS_MYSQL
+  return rethrow_as<OpenError>([&] {
+    auto impl = std::make_unique<Impl>();
+    impl->sql.open(*soci::factory_mysql(), connect);
+    impl->dialect = Dialect::mysql;
+    // dataward quotes identifiers with double quotes everywhere; MySQL only
+    // accepts that under ANSI_QUOTES.
+    impl->sql << "SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')";
+    return Store(std::move(impl));
+  });
+#else
+  throw OpenError("dataward: built without MySQL support (DATAWARD_WITH_MYSQL=OFF)");
+#endif
+}
+
+Dialect Store::dialect() const { return impl_->dialect; }
 
 void Store::exec(const std::string& sql) {
   rethrow_as<QueryError>([&] { impl_->sql << sql; });

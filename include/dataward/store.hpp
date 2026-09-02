@@ -19,7 +19,22 @@
 
 namespace dataward {
 
+// Which SQL flavour the open connection speaks. Apps normally never look at
+// this; ensure() uses it to pick column types.
+enum class Dialect { sqlite, mysql };
+
 namespace detail {
+
+// Per-dialect column-type fixups over the SQLite-flavoured base types.
+inline std::string sql_column_type(const char* base, Dialect d, bool pk) {
+  if (d == Dialect::mysql) {
+    // MySQL INTEGER is 32-bit; we always marshal through int64.
+    if (std::string_view(base) == "INTEGER") return "BIGINT";
+    // TEXT cannot be a MySQL primary key without a prefix length.
+    if (pk && std::string_view(base) == "TEXT") return "VARCHAR(255)";
+  }
+  return base;
+}
 
 template <class T>
 constexpr std::string_view wrapped_name() {
@@ -160,6 +175,13 @@ class Store {
   // Opens (creating if absent) a SQLite database at `path`.
   static Store sqlite(const std::string& path);
 
+  // Opens a MySQL database. `connect` is a SOCI connect string, e.g.
+  // "db=app user=u password=p host=127.0.0.1 port=3306". Throws OpenError
+  // when dataward was built without MySQL support (DATAWARD_WITH_MYSQL=OFF).
+  static Store mysql(const std::string& connect);
+
+  Dialect dialect() const;
+
   ~Store();
   Store(Store&&) noexcept;
   Store& operator=(Store&&) noexcept;
@@ -183,7 +205,7 @@ class Store {
       sql += '"';
       sql += d.name;
       sql += "\" ";
-      sql += detail::column_traits<M>::sql_type;
+      sql += detail::sql_column_type(detail::column_traits<M>::sql_type, dialect(), first);
       if (first)
         sql += " PRIMARY KEY";
       else if (!detail::is_optional<M>::value)
@@ -194,11 +216,10 @@ class Store {
     exec(sql);
   }
 
-  // Upsert by primary key.
+  // Upsert by primary key. REPLACE INTO (delete+insert semantics) is the one
+  // upsert spelling SQLite and MySQL share.
   template <class T>
   void put(const T& obj) {
-    // ponytail: INSERT OR REPLACE is SQLite dialect; the dialect table arrives
-    // with the MySQL backend (phase 3).
     std::string cols, marks;
     std::vector<Value> binds;
     std::size_t i = 0;
@@ -214,7 +235,7 @@ class Store {
       marks += ":b" + std::to_string(i++);
       binds.push_back(detail::column_traits<M>::to_value(obj.*d.pointer));
     });
-    std::string sql = "INSERT OR REPLACE INTO \"";
+    std::string sql = "REPLACE INTO \"";
     sql += detail::type_name<T>();
     sql += "\" (" + cols + ") VALUES (" + marks + ")";
     exec_bound(sql, binds);
