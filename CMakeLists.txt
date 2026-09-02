@@ -67,6 +67,7 @@ if(DATAWARD_BUILD_TESTS)
 
   add_executable(dataward_tests
     tests/optional_date_test.cpp
+    tests/query_api_test.cpp
     tests/store_roundtrip_test.cpp
     tests/typed_api_test.cpp
     tests/version_test.cpp)

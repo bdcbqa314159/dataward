@@ -131,6 +131,17 @@ struct column_traits<std::optional<U>> {
   }
 };
 
+// Converts one bind argument: strings stay strings, everything else goes
+// through the type map (so year_month_day, optional, bool all bind correctly).
+template <class A>
+Value to_bind(A&& a) {
+  using D = std::decay_t<A>;
+  if constexpr (std::is_convertible_v<D, std::string>)
+    return std::string(std::forward<A>(a));
+  else
+    return column_traits<D>::to_value(std::forward<A>(a));
+}
+
 }  // namespace detail
 
 // Handle to one open database. Move-only. The backend behind it (SOCI) is an
@@ -206,29 +217,75 @@ class Store {
     using First = boost::mp11::mp_first<detail::members<T>>;
     using M0 = detail::member_type<T, First>;
 
-    std::string cols;
-    boost::mp11::mp_for_each<detail::members<T>>([&](auto d) {
-      if (!cols.empty()) cols += ", ";
-      cols += '"';
-      cols += d.name;
-      cols += '"';
-    });
-    std::string sql = "SELECT " + cols + " FROM \"";
-    sql += detail::type_name<T>();
-    sql += "\" WHERE \"";
+    std::string sql = select_prefix<T>() + " WHERE \"";
     sql += First::name;
     sql += "\" = :b0 LIMIT 1";
 
     auto row = query_row(sql, {detail::column_traits<M0>::to_value(M0(pk))});
     if (!row) return std::nullopt;
-    T out{};
-    std::size_t i = 0;
-    boost::mp11::mp_for_each<detail::members<T>>([&](auto d) {
-      using M = detail::member_type<T, decltype(d)>;
-      out.*d.pointer = detail::column_traits<M>::from_value((*row)[i++]);
-    });
-    return out;
+    return from_row<T>(*row);
   }
+
+  // Every row, in database order. Order explicitly via where() when it matters.
+  template <class T>
+  std::vector<T> all() {
+    return rows_to<T>(query_rows(select_prefix<T>(), {}));
+  }
+
+  // SQL fragment after WHERE, values bound as :b0, :b1, ... in argument order.
+  // The fragment may carry ORDER BY / LIMIT: where<T>("pages > :b0 ORDER BY title", 300).
+  template <class T, class... Binds>
+  std::vector<T> where(const std::string& frag, Binds&&... binds) {
+    return rows_to<T>(query_rows(select_prefix<T>() + " WHERE " + frag,
+                                 {detail::to_bind(std::forward<Binds>(binds))...}));
+  }
+
+  // Delete by primary key. No-op when absent.
+  template <class T, class Pk>
+  void remove(const Pk& pk) {
+    using First = boost::mp11::mp_first<detail::members<T>>;
+    using M0 = detail::member_type<T, First>;
+    std::string sql = "DELETE FROM \"";
+    sql += detail::type_name<T>();
+    sql += "\" WHERE \"";
+    sql += First::name;
+    sql += "\" = :b0";
+    exec_bound(sql, {detail::column_traits<M0>::to_value(M0(pk))});
+  }
+
+  // Bulk upsert in one transaction.
+  template <class T>
+  void put_many(const std::vector<T>& objs) {
+    // ponytail: one put per row inside a txn; switch to SOCI vector binds if
+    // bulk insert ever shows up in a profile.
+    auto txn = begin();
+    for (const auto& obj : objs) put(obj);
+    txn.commit();
+  }
+
+  // RAII transaction: commit() explicitly, destruction without commit rolls back.
+  class Transaction {
+   public:
+    ~Transaction() {
+      if (store_ != nullptr) store_->exec("ROLLBACK");
+    }
+    Transaction(Transaction&& o) noexcept : store_(o.store_) { o.store_ = nullptr; }
+    Transaction& operator=(Transaction&&) = delete;
+    Transaction(const Transaction&) = delete;
+    Transaction& operator=(const Transaction&) = delete;
+
+    void commit() {
+      store_->exec("COMMIT");
+      store_ = nullptr;
+    }
+
+   private:
+    friend class Store;
+    explicit Transaction(Store& store) : store_(&store) { store.exec("BEGIN"); }
+    Store* store_;
+  };
+
+  Transaction begin() { return Transaction(*this); }
 
   // ponytail: raw-SQL escape hatches prove the round-trip until the typed
   // Describe-driven API lands (sessions 2-4); they become private seam helpers then.
@@ -240,8 +297,44 @@ class Store {
   void exec_bound(const std::string& sql, const std::vector<Value>& binds);
   std::optional<std::vector<Value>> query_row(const std::string& sql,
                                               const std::vector<Value>& binds);
+  std::vector<std::vector<Value>> query_rows(const std::string& sql,
+                                             const std::vector<Value>& binds);
 
  private:
+  template <class T>
+  static std::string select_prefix() {
+    std::string cols;
+    boost::mp11::mp_for_each<detail::members<T>>([&](auto d) {
+      if (!cols.empty()) cols += ", ";
+      cols += '"';
+      cols += d.name;
+      cols += '"';
+    });
+    std::string sql = "SELECT " + cols + " FROM \"";
+    sql += detail::type_name<T>();
+    sql += '"';
+    return sql;
+  }
+
+  template <class T>
+  static T from_row(const std::vector<Value>& row) {
+    T out{};
+    std::size_t i = 0;
+    boost::mp11::mp_for_each<detail::members<T>>([&](auto d) {
+      using M = detail::member_type<T, decltype(d)>;
+      out.*d.pointer = detail::column_traits<M>::from_value(row[i++]);
+    });
+    return out;
+  }
+
+  template <class T>
+  static std::vector<T> rows_to(const std::vector<std::vector<Value>>& rows) {
+    std::vector<T> out;
+    out.reserve(rows.size());
+    for (const auto& r : rows) out.push_back(from_row<T>(r));
+    return out;
+  }
+
   struct Impl;
   explicit Store(std::unique_ptr<Impl> impl);
   std::unique_ptr<Impl> impl_;

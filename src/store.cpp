@@ -93,6 +93,26 @@ void Store::exec_bound(const std::string& sql, const std::vector<Value>& binds) 
   st.execute(true);
 }
 
+std::vector<std::vector<Value>> Store::query_rows(const std::string& sql,
+                                                  const std::vector<Value>& binds) {
+  soci::row r;
+  soci::statement st(impl_->sql);
+  Binder b;
+  for (const auto& v : binds) b.bind(st, v);
+  st.exchange(soci::into(r));
+  st.alloc();
+  st.prepare(sql);
+  st.define_and_bind();
+  std::vector<std::vector<Value>> out;
+  for (bool got = st.execute(true); got; got = st.fetch()) {
+    std::vector<Value> row;
+    row.reserve(r.size());
+    for (std::size_t i = 0; i < r.size(); ++i) row.push_back(cell_to_value(r, i));
+    out.push_back(std::move(row));
+  }
+  return out;
+}
+
 std::optional<std::vector<Value>> Store::query_row(const std::string& sql,
                                                    const std::vector<Value>& binds) {
   soci::row r;
