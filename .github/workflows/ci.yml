@@ -71,6 +71,7 @@ jobs:
       - name: Test (MySQL suite live, rest too)
         env:
           DATAWARD_MYSQL_TEST: "db=dataward_test user=root password=ci host=127.0.0.1 port=3306"
+          DATAWARD_MYSQL_PASSWORD: "ci"
         run: ctest --test-dir build --output-on-failure
 
   sanitizers:

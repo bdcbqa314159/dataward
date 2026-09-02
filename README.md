@@ -24,6 +24,14 @@ BOOST_DESCRIBE_STRUCT(Book, (), (id, title, pages, started, finished, rating))
 
 auto store = dataward::Store::sqlite("books.db");
 // or: dataward::Store::mysql("db=app user=u password=p host=127.0.0.1 port=3306");
+
+// Or via a profile — MySQL passwords resolve env var -> keyward secret -> fail loudly:
+dataward::Profile p;
+p.backend = dataward::Dialect::mysql;
+p.db = "app"; p.user = "svc";
+p.password_env = "APP_DB_PASSWORD";                   // tried first
+p.password_secret = "keyward://app/db-password";      // then this (DATAWARD_WITH_KEYWARD=ON)
+auto prod = dataward::open(p);
 store.ensure<Book>();                       // CREATE TABLE IF NOT EXISTS "Book"
 store.put(book);                            // upsert by pk
 store.put_many<Book>({b1, b2, b3});         // bulk, one transaction
@@ -62,6 +70,10 @@ ctest --test-dir build/debug --output-on-failure
 
 Dependencies (all via FetchContent, no system packages needed): SOCI with its
 bundled SQLite3, Boost.Describe + Mp11, GoogleTest for the tests.
+
+keyward secret resolution is opt-in — `-DDATAWARD_WITH_KEYWARD=ON` fetches
+[keyward](https://github.com/bdcbqa314159/keyward); without it, a
+`keyward://` profile throws `OpenError`.
 
 MySQL is opt-in — `-DDATAWARD_WITH_MYSQL=ON` — and needs libmysqlclient
 (`brew install mysql` / `apt install libmysqlclient-dev`). On a Mac without
