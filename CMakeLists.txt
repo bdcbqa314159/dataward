@@ -17,7 +17,11 @@ set(SOCI_INSTALL OFF CACHE BOOL "" FORCE)
 set(WITH_BOOST OFF CACHE BOOL "" FORCE)
 set(SOCI_SQLITE3 ON CACHE BOOL "" FORCE)
 set(SOCI_SQLITE3_BUILTIN ON CACHE STRING "" FORCE)
-foreach(backend DB2 EMPTY FIREBIRD MYSQL ODBC ORACLE POSTGRESQL)
+# MySQL needs libmysqlclient on the system, so it is opt-in (SQLite stays
+# dependency-free). ON: brew mysql / libmysqlclient-dev; not supported on Windows CI.
+option(DATAWARD_WITH_MYSQL "Build the MySQL backend (needs libmysqlclient)" OFF)
+set(SOCI_MYSQL ${DATAWARD_WITH_MYSQL} CACHE BOOL "" FORCE)
+foreach(backend DB2 EMPTY FIREBIRD ODBC ORACLE POSTGRESQL)
   set(SOCI_${backend} OFF CACHE BOOL "" FORCE)
 endforeach()
 FetchContent_Declare(soci
@@ -46,6 +50,10 @@ target_compile_definitions(dataward PRIVATE DATAWARD_VERSION="${PROJECT_VERSION}
 target_link_libraries(dataward
   PUBLIC Boost::describe Boost::mp11
   PRIVATE soci_sqlite3)
+if(DATAWARD_WITH_MYSQL)
+  target_link_libraries(dataward PRIVATE soci_mysql)
+  target_compile_definitions(dataward PRIVATE DATAWARD_HAS_MYSQL)
+endif()
 
 if(MSVC)
   target_compile_options(dataward PRIVATE /W4)
@@ -67,6 +75,7 @@ if(DATAWARD_BUILD_TESTS)
 
   add_executable(dataward_tests
     tests/error_test.cpp
+    tests/mysql_test.cpp
     tests/optional_date_test.cpp
     tests/query_api_test.cpp
     tests/store_roundtrip_test.cpp

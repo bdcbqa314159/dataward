@@ -45,6 +45,34 @@ jobs:
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
 
+  mysql:
+    name: mysql backend (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: ci
+          MYSQL_DATABASE: dataward_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -pci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libmysqlclient
+        run: sudo apt-get update && sudo apt-get install -y libmysqlclient-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDATAWARD_WITH_MYSQL=ON
+      - name: Build
+        run: cmake --build build -j
+      - name: Test (MySQL suite live, rest too)
+        env:
+          DATAWARD_MYSQL_TEST: "db=dataward_test user=root password=ci host=127.0.0.1 port=3306"
+        run: ctest --test-dir build --output-on-failure
+
   sanitizers:
     name: sanitizers (ASan+UBSan)
     runs-on: ubuntu-latest

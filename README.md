@@ -5,7 +5,7 @@ Typed persistence for C++20. Declare a struct, describe it once with
 marshalling — the database backend becomes a deployment detail.
 
 Sibling of [keyward](https://github.com/bdcbqa314159/keyward). Status: SQLite
-backend complete; MySQL backend planned. API not yet stable.
+and MySQL backends working. API not yet stable.
 
 ## Use
 
@@ -23,6 +23,7 @@ struct Book {
 BOOST_DESCRIBE_STRUCT(Book, (), (id, title, pages, started, finished, rating))
 
 auto store = dataward::Store::sqlite("books.db");
+// or: dataward::Store::mysql("db=app user=u password=p host=127.0.0.1 port=3306");
 store.ensure<Book>();                       // CREATE TABLE IF NOT EXISTS "Book"
 store.put(book);                            // upsert by pk
 store.put_many<Book>({b1, b2, b3});         // bulk, one transaction
@@ -61,6 +62,12 @@ ctest --test-dir build/debug --output-on-failure
 
 Dependencies (all via FetchContent, no system packages needed): SOCI with its
 bundled SQLite3, Boost.Describe + Mp11, GoogleTest for the tests.
+
+MySQL is opt-in — `-DDATAWARD_WITH_MYSQL=ON` — and needs libmysqlclient
+(`brew install mysql` / `apt install libmysqlclient-dev`). On a Mac without
+pkg-config, also pass `-DMySQL_INCLUDE_DIRS=... -DMySQL_LIBRARIES=...`
+(SOCI's mysql_config fallback mis-parses Homebrew's -L flags). MySQL tests run
+only when `DATAWARD_MYSQL_TEST` holds a connect string; otherwise they skip.
 
 ## Consume via FetchContent
 
