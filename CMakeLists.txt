@@ -17,6 +17,10 @@ set(SOCI_INSTALL OFF CACHE BOOL "" FORCE)
 set(WITH_BOOST OFF CACHE BOOL "" FORCE)
 set(SOCI_SQLITE3 ON CACHE BOOL "" FORCE)
 set(SOCI_SQLITE3_BUILTIN ON CACHE STRING "" FORCE)
+# Without this, SOCI links a system fmt when one exists (e.g. Homebrew's
+# libfmt.dylib) and consumer binaries silently grow a machine-local dynamic
+# dependency. Bundled fmt keeps them self-contained.
+set(SOCI_FMT_BUILTIN ON CACHE STRING "" FORCE)
 # MySQL needs libmysqlclient on the system, so it is opt-in (SQLite stays
 # dependency-free). ON: brew mysql / libmysqlclient-dev; not supported on Windows CI.
 option(DATAWARD_WITH_MYSQL "Build the MySQL backend (needs libmysqlclient)" OFF)
