@@ -336,11 +336,21 @@ class Store {
 
    private:
     friend class Store;
-    explicit Transaction(Store& store) : store_(&store) { store.exec("BEGIN"); }
+    Transaction(Store& store, bool immediate) : store_(&store) {
+      // BEGIN IMMEDIATE takes SQLite's write lock up front, making
+      // read-then-write sequences (e.g. MAX(id)+1 allocation) atomic across
+      // processes. MySQL has no equivalent keyword; InnoDB transactions plus
+      // row locking cover the sqlite-visible races, so it degrades to BEGIN.
+      store.exec(immediate && store.dialect() == Dialect::sqlite ? "BEGIN IMMEDIATE" : "BEGIN");
+    }
     Store* store_;
   };
 
-  Transaction begin() { return Transaction(*this); }
+  Transaction begin() { return Transaction(*this, /*immediate=*/false); }
+  // Takes the write lock at BEGIN (SQLite): use when the transaction reads
+  // state it is about to write (id allocation, counters) and a concurrent
+  // writer would race the read.
+  Transaction begin_immediate() { return Transaction(*this, /*immediate=*/true); }
 
   // Deliberate low-level layer (kept public): raw SQL for what the typed API
   // stays out of by design — PRAGMAs, indexes, migrations, ad-hoc aggregates.
