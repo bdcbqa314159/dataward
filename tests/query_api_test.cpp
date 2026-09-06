@@ -79,6 +79,25 @@ TEST(QueryApi, TransactionCommits) {
   EXPECT_EQ(store.all<Track>().size(), 1u);
 }
 
+TEST(QueryApi, BeginImmediateTakesTheWriteLock) {
+  const auto path = std::filesystem::path(testing::TempDir()) / "txn_immediate.db";
+  std::filesystem::remove(path);
+  auto writer = dataward::Store::sqlite(path.string());
+  writer.ensure<Track>();
+  auto rival = dataward::Store::sqlite(path.string());
+
+  auto txn = writer.begin_immediate();
+  // The lock is held from BEGIN, so a rival immediate transaction is refused
+  // instead of racing the read-then-write sequence.
+  EXPECT_THROW(rival.exec("BEGIN IMMEDIATE"), dataward::QueryError);
+  writer.put(Track{"a", "X", 1});
+  txn.commit();
+
+  auto rival_txn = rival.begin_immediate();  // free again after commit
+  rival_txn.commit();
+  EXPECT_EQ(rival.all<Track>().size(), 1u);
+}
+
 TEST(QueryApi, TransactionRollsBackOnDestruction) {
   auto store = fresh_store("txn_rollback.db");
   store.ensure<Track>();
